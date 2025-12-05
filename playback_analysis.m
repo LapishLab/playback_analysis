@@ -1,6 +1,5 @@
 clear
 file = 'UVS-Schedule.xlsx'; % give full path to the excel sheet or have in your current directory
-
 %% %%%%% Read data from Bao's excel  sheet %%%%%%%%%%
 rat_info = readtable(file, Sheet='rat_info');
 
@@ -30,19 +29,8 @@ ylim([0, max(ylim())])
 title('By Day')
 exportgraphics(gcf,'by_day.png');
 %% %%%%%%%%% Per audio condition %%%%%%%%%%%%
-% resort consumed by audio condition
-[B,c_ind] = sort(audio{:,:},2);
-r_ind = repmat(1:height(audio), width(audio),1)';
-lin_ind = sub2ind(size(audio), r_ind, c_ind);
-
-audio_consumed = consumed{:,:};
-audio_consumed = audio_consumed(lin_ind);
-audio_consumed = array2table(audio_consumed);
-audio_consumed.Properties.VariableNames = B(1,:);
-audio_consumed.Properties.RowNames = audio.Properties.RowNames;
-audio_consumed = audio_consumed(:, {'none1','none2','noise','happy','sad'}); %reorder
-
-% Plot mean ethanol consumed for each group and average (single plot) 
+audio_consumed = sort_by_audio(audio, consumed);
+%% Plot mean ethanol consumed for each group and average (single plot) 
 figure(2); clf; hold on;
 plot_group_mean(audio_consumed, rat_info.Cohort, 'HM')
 plot_group_mean(audio_consumed, rat_info.Cohort, 'HF')
@@ -104,7 +92,73 @@ ylim([0, max(ylim())])
 xlim()
 title('Relative to Noise')
 exportgraphics(gcf,'noise_relative.png');
+
+
+%% Get licks
+% first download licks from datastar with a command something like this...
+%rsync -a lapishla@datastar.psych.indianapolis.iu.edu:/research/behavior_rooms/2CAP/*playback*/med-pc* /mnt/c/Users/daswyga/Documents/GitHub/playback_analysis/med
+% replace /mnt/c/Users/daswyga... with the destination.
+med_folder = './med'; % path to the med data you just downloaded. This assumed current directory in a folder named "med"
+licks = load_licks(file, med_folder);
+audio_licks = sort_by_audio(audio, licks); % sort by audio type
+
+%% plot licks for a specific group
+figure(5);clf;hold on;
+
+group='HM';
+conditions={'noise','happy','sad'};
+plot_licks(audio_licks(:,conditions), rat_info.Cohort, group)
+
 %% %%%%%%%%%%%%%% functions %%%%%%%%%%%%%%%%%%%%%%%%%
+function plot_licks(y, groups, label)
+    g = contains(groups,label);
+    y=y(g,:);
+
+    common_prop = cell(size(y));
+    max_t = 30*60;
+   common_time = 0:1:max_t; %resample at 1s for 30 minutes
+
+    for r=1:height(y)
+        for c=1:width(y)
+            try
+                common_prop{r,c} = get_common_cdf(y{r,c}, common_time);
+            catch exception
+            end
+        end
+    end
+
+    n_conditions = width(common_prop);
+    colors = colororder();
+    for c = 1:n_conditions
+        y_val = cat(1, common_prop{:,c});
+        x_val = common_time;
+
+        % subplot(n_conditions,1,c)
+        shadedErrorBar(x_val,y_val, {@nan_mean, @sem}, 'lineProps',{ ...
+            'Color', colors(c,:), ...
+        'DisplayName', y.Properties.VariableNames{c} ...
+        })
+        
+    end
+    legend(Location='northwest')
+    xlabel('Time (s)')
+    ylabel('Cumulative licks')
+    title(label)
+end
+
+
+function common_prop = get_common_cdf(l,common_time)
+    l = l{1}; %might need to unpack?
+   [prop,time] = ecdf(l(l<max(common_time)));
+   
+
+   [time,ind] = unique(time);
+   prop = prop(ind);
+   common_prop = interp1(time,prop,common_time,"previous", 'extrap');
+
+   common_prop = common_prop*length(l); %report in lick counts, not proportion
+end
+
 function plot_group_mean(y, groups, label)
     x= 1:width(y);
     g = contains(groups,label);
@@ -117,18 +171,7 @@ function plot_group_mean(y, groups, label)
     xmargin = .2;
     xlim([x(1)-xmargin x(end)+xmargin])
 end
-function t = read_sheet(file, sheet, header_start, data_start)
-    opts = detectImportOptions(file);
-    opts.VariableNamesRange=header_start;
-    opts.DataRange=data_start;
-    for i = 1:numel(opts.VariableNames)
-        opts = setvartype(opts, opts.VariableNames{i}, 'string'); 
-    end
-    t = readtable(file, opts, Sheet=sheet);
 
-    empty_column = contains(t.Properties.VariableNames, 'Var') & all(ismissing(t));
-    t(:, empty_column) = [];
-end
 function err = sem(y)
     err = std(y,0,1,"omitmissing") / sqrt(height(y));
 end
